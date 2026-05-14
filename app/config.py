@@ -11,6 +11,7 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class Settings:
+    tushare_token: str = os.getenv("TUSHARE_TOKEN", "")
     postgres_host: str = os.getenv("POSTGRES_HOST", "127.0.0.1")
     postgres_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
     postgres_db: str = os.getenv("POSTGRES_DB", "postgres")

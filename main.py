@@ -7,7 +7,7 @@ import uvicorn
 
 from app.api import create_app
 from app.config import Settings
-from app.migrations import run_migrations
+from app.db.migrations import run_migrations
 
 
 def run_server() -> None:
