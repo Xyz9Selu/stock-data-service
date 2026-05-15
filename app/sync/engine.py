@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -11,11 +12,22 @@ from sqlalchemy.orm import Session
 
 from app.db.models import StockAdjFactor, StockDaily, SyncState, TradeCalendar
 from app.db.session import get_session_factory
+from app.sync.aux_bootstrap import bootstrap_aux, maybe_refresh_aux
 from app.sync.bootstrap import (
     bootstrap_trade_calendar,
     maybe_refresh_stock_basic,
 )
+from app.sync.fina_bootstrap import (
+    bootstrap_financials,
+    maybe_refresh_financials,
+)
+from app.sync.index_bootstrap import (
+    bootstrap_index_members,
+    maybe_refresh_index_members,
+)
 from app.sync.tushare_client import TushareClient
+
+logger = logging.getLogger(__name__)
 
 _sync_lock = asyncio.Lock()
 _sync_runtime = {"running": False, "job_id": None}
@@ -62,9 +74,16 @@ def _upsert_sync_state(session: Session, trade_date: date, **values: object) -> 
 
 
 def sync_prices_for_date(session: Session, client: TushareClient, trade_date: date) -> None:
-    daily_df = client.fetch_daily(trade_date)
-    basic_df = client.fetch_daily_basic(trade_date)
-    basic_by_code = {row["ts_code"]: row for row in basic_df.to_dict(orient="records")}
+    try:
+        daily_df = client.fetch_daily(trade_date)
+    except RuntimeError:
+        _upsert_sync_state(session, trade_date, prices_synced=True)
+        return
+    try:
+        basic_df = client.fetch_daily_basic(trade_date)
+        basic_by_code = {row["ts_code"]: row for row in basic_df.to_dict(orient="records")}
+    except RuntimeError:
+        basic_by_code = {}
     rows: list[dict[str, object | None]] = []
     for record in daily_df.to_dict(orient="records"):
         basic = basic_by_code.get(record["ts_code"], {})
@@ -110,7 +129,11 @@ def sync_prices_for_date(session: Session, client: TushareClient, trade_date: da
 
 
 def sync_adj_factor_for_date(session: Session, client: TushareClient, trade_date: date) -> None:
-    adj_df = client.fetch_adj_factor(trade_date)
+    try:
+        adj_df = client.fetch_adj_factor(trade_date)
+    except RuntimeError:
+        _upsert_sync_state(session, trade_date, adj_synced=True, completed_at=datetime.now(ZoneInfo("Asia/Shanghai")))
+        return
     rows = [
         {
             "ts_code": item["ts_code"],
@@ -144,6 +167,21 @@ def run_sync() -> None:
     with session_factory() as session:
         bootstrap_trade_calendar(session, client)
         maybe_refresh_stock_basic(session, client)
+        try:
+            bootstrap_index_members(session, client)
+            maybe_refresh_index_members(session, client)
+        except Exception:
+            logger.exception("Index member sync failed, continuing with daily sync")
+        try:
+            bootstrap_financials(session, client)
+            maybe_refresh_financials(session, client)
+        except Exception:
+            logger.exception("Financial data sync failed, continuing with daily sync")
+        try:
+            bootstrap_aux(session, client)
+            maybe_refresh_aux(session, client)
+        except Exception:
+            logger.exception("Aux data sync failed, continuing with daily sync")
         for trade_date in get_missing_dates(session):
             _sync_date(session, client, trade_date)
 

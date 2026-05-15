@@ -10,6 +10,6 @@ wheels/
 .venv
 
 # Local PostgreSQL bind-mounted data
-.local/postgres-data/
+postgres-data/
 
 .env

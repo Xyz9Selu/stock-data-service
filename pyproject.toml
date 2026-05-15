@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "akshare>=1.18.60",
     "fastapi",
     "psycopg2-binary",
     "python-dotenv",

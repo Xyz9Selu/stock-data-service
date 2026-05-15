@@ -14,27 +14,23 @@ class TushareClient:
         cfg = settings or Settings()
         if not cfg.tushare_token:
             raise ValueError("TUSHARE_TOKEN is required")
-        self._api = ts.pro_api(cfg.tushare_token)
+        self._api = ts.pro_api(cfg.tushare_token, timeout=10)
         self._last_call_at = 0.0
 
     def _throttle(self) -> None:
-        now = time.monotonic()
-        elapsed = now - self._last_call_at
-        if elapsed < 0.2:
-            time.sleep(0.2 - elapsed)
         self._last_call_at = time.monotonic()
 
     def _call_with_retry(self, fn_name: str, **kwargs: Any) -> Any:
-        delays = (1, 2, 4)
+        delays = (0.5, 1)
         last_error: Exception | None = None
-        for index in range(4):
+        for index in range(3):
             try:
                 self._throttle()
                 method = getattr(self._api, fn_name)
                 return method(**kwargs)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:
                 last_error = exc
-                if index == 3:
+                if index == 2:
                     break
                 time.sleep(delays[index])
         raise RuntimeError(f"Tushare call {fn_name} failed after retries") from last_error
