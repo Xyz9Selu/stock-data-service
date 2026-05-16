@@ -8,6 +8,7 @@ import uvicorn
 from app.api import create_app
 from app.config import Settings
 from app.db.migrations import run_migrations
+from app.sync.engine import run_sync
 
 
 def run_server() -> None:
@@ -24,10 +25,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="stock-data-service local runner")
     parser.add_argument(
         "command",
-        choices=["migrate", "serve", "start"],
+        choices=["migrate", "serve", "start", "sync"],
         nargs="?",
         default="start",
-        help="migrate: run DB migration only, serve: run API only, start: migrate then serve",
+        help="migrate: run DB migration only, serve: run API only, start: migrate then serve, "
+             "sync: run full data sync once and exit",
     )
     return parser.parse_args()
 
@@ -44,6 +46,12 @@ def main() -> int:
             return 0
         if args.command == "serve":
             run_server()
+            return 0
+        if args.command == "sync":
+            run_migrations()
+            print("Migrations completed. Starting data sync...")
+            run_sync()
+            print("Sync completed.")
             return 0
 
         run_migrations()
