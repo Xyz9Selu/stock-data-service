@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Index, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -19,6 +19,9 @@ class TradeCalendar(Base):
 
 class StockBasic(Base):
     __tablename__ = "stock_basic"
+    __table_args__ = (
+        Index("idx_stock_basic_list_status", "list_status"),
+    )
 
     ts_code: Mapped[str] = mapped_column(String, primary_key=True)
     symbol: Mapped[str | None] = mapped_column(String)
@@ -36,6 +39,9 @@ class StockBasic(Base):
 
 class StockDaily(Base):
     __tablename__ = "stock_daily"
+    __table_args__ = (
+        Index("idx_stock_daily_trade_date", "trade_date"),
+    )
 
     ts_code: Mapped[str] = mapped_column(String, primary_key=True)
     trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
@@ -77,6 +83,7 @@ class IndexMember(Base):
     __tablename__ = "index_member"
     __table_args__ = (
         UniqueConstraint("index_code", "ts_code", "trade_date", name="uq_index_member"),
+        Index("idx_index_member_trade_date", "trade_date"),
     )
 
     index_code: Mapped[str] = mapped_column(String, primary_key=True)
@@ -105,6 +112,7 @@ class FinaIndicator(Base):
     __tablename__ = "fina_indicator"
     __table_args__ = (
         UniqueConstraint("ts_code", "end_date", name="uq_fina_indicator"),
+        Index("idx_fina_indicator_end_date", "end_date"),
     )
 
     ts_code: Mapped[str] = mapped_column(String, primary_key=True)
@@ -154,6 +162,7 @@ class IncomeStatement(Base):
     __tablename__ = "income_statement"
     __table_args__ = (
         UniqueConstraint("ts_code", "end_date", name="uq_income_statement"),
+        Index("idx_income_statement_end_date", "end_date"),
     )
 
     ts_code: Mapped[str] = mapped_column(String, primary_key=True)
@@ -241,6 +250,7 @@ class Dividend(Base):
     __tablename__ = "dividend"
     __table_args__ = (
         UniqueConstraint("ts_code", "end_date", "div_proc", name="uq_dividend"),
+        Index("idx_dividend_ex_date", "ex_date"),
     )
 
     ts_code: Mapped[str] = mapped_column(String, primary_key=True)
@@ -261,6 +271,9 @@ class Dividend(Base):
 
 class SuspendD(Base):
     __tablename__ = "suspend_d"
+    __table_args__ = (
+        Index("idx_suspend_d_trade_date", "trade_date"),
+    )
 
     ts_code: Mapped[str] = mapped_column(String, primary_key=True)
     trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
