@@ -31,33 +31,38 @@ Defaults:
 
 ## 2) Start with Docker Compose (recommended)
 
+Compose runs **API only** and connects to your **existing host PostgreSQL**
+(`host.docker.internal:5432` → usually the machine’s PG on port 5432).
+It does **not** start a `db` container.
+
 ```bash
 cd ~/stock-data-service
+# ensure host PG is up and .env has POSTGRES_DB/USER/PASSWORD/TUSHARE_TOKEN
 docker compose up -d --build
 ```
 
-Services:
-
 | Service | Container | Port |
 |---------|-----------|------|
-| `db` | `stock-data-service-db` | host `15432` → 5432 |
 | `api` | `stock-data-service-api` | host `8002` → 8002 |
+
+DB: host `127.0.0.1:5432` (from inside container: `host.docker.internal`).
 
 Useful commands:
 
 ```bash
 docker compose ps
 docker compose logs -f api
-docker compose down          # keep volumes/bind data
+docker compose down
 curl -s http://127.0.0.1:8002/healthz | jq .
 ```
 
-Cache files live on the host at `./data/cache/<api>/<hash>.json`.
+Cache files: `./data/cache/<api>/<hash>.json`.
 
-Production (named volumes, DB not published):
+Production (same idea, optional named cache volume):
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
+# remote DB: DOCKER_POSTGRES_HOST=your-db-host
 ```
 
 ## 3) REST API (on-demand cache)

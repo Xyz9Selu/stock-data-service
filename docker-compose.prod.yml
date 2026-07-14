@@ -1,35 +1,18 @@
-services:
-  db:
-    image: postgres:16
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-stock_data}
-      POSTGRES_USER: ${POSTGRES_USER:-appuser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    volumes:
-      - pg_data_prod:/var/lib/postgresql/data
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-appuser} -d ${POSTGRES_DB:-stock_data}",
-        ]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    # DB not published to host in prod; app reaches it on internal network
+# Production: API only against external PostgreSQL (no db container).
+# Set POSTGRES_* in .env to the real DB host.
 
+services:
   api:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
+      # External/host PG — set POSTGRES_HOST in .env for remote DBs; default host gateway
+      POSTGRES_HOST: ${DOCKER_POSTGRES_HOST:-host.docker.internal}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       POSTGRES_DB: ${POSTGRES_DB:-stock_data}
       POSTGRES_USER: ${POSTGRES_USER:-appuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -52,5 +35,4 @@ services:
       retries: 3
 
 volumes:
-  pg_data_prod:
   query_cache_prod:
