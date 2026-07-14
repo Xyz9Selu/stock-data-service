@@ -3,20 +3,23 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-stock_data}
+      POSTGRES_USER: ${POSTGRES_USER:-appuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pg_data_prod:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-appuser} -d ${POSTGRES_DB:-stock_data}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 20
+    # DB not published to host in prod; app reaches it on internal network
 
-  app:
+  api:
     build:
       context: .
       dockerfile: Dockerfile
@@ -27,15 +30,27 @@ services:
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-stock_data}
+      POSTGRES_USER: ${POSTGRES_USER:-appuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       APP_HOST: 0.0.0.0
-      APP_PORT: 8000
+      APP_PORT: 8002
+      DATA_ROOT: /data/cache
       TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      TUSHARE_MIN_INTERVAL: ${TUSHARE_MIN_INTERVAL:-0.35}
+      TUSHARE_REPORT_RC_INTERVAL: ${TUSHARE_REPORT_RC_INTERVAL:-61}
+      CACHE_TTL_HOURS: ${CACHE_TTL_HOURS:-24}
     ports:
-      - "${APP_PORT:-8000}:8000"
-    command: ["python", "main.py", "start"]
+      - "${APP_PORT:-8002}:8002"
+    volumes:
+      - query_cache_prod:/data/cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8002/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
 
 volumes:
   pg_data_prod:
+  query_cache_prod:

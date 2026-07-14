@@ -1,15 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "stock-data-service"
 version = "0.1.0"
-description = "Add your description here"
+description = "A-share data service: PG sync + on-demand Tushare disk cache API"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "akshare>=1.18.60",
     "fastapi",
+    "mcp>=1.0.0",
     "psycopg2-binary",
     "python-dotenv",
     "sqlalchemy",
     "tushare",
     "uvicorn",
 ]
+
+[project.scripts]
+stock-data-mcp = "app.mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
