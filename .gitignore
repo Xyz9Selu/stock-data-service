@@ -13,3 +13,5 @@ wheels/
 postgres-data/
 
 .env
+data/cache/**
+!data/cache/.gitkeep

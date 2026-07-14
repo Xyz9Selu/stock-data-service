@@ -86,19 +86,39 @@ uv run python main.py start
 
 Migration errors stop startup immediately with non-zero exit code.
 
-## 4) Validation checklist
+## 4) On-demand query cache (Serenity)
+
+Besides full-market daily sync into PostgreSQL, the service exposes **disk-cached** Tushare queries:
+
+```bash
+# after serve is up (default port from .env APP_PORT, often 8002)
+curl 'http://127.0.0.1:8002/v1/fina_mainbz?ts_code=600160.SH&type=P'
+curl 'http://127.0.0.1:8002/v1/report_rc?ts_code=688498.SH&start_date=20250101'
+curl 'http://127.0.0.1:8002/v1/cache/stats'
+# generic
+curl -X POST 'http://127.0.0.1:8002/v1/tushare/daily_basic' \
+  -H 'Content-Type: application/json' \
+  -d '{"params":{"ts_code":"688498.SH","trade_date":"20260714"}}'
+```
+
+Cache files: `data/cache/<api_name>/<hash>.json` (gitignored).  
+`report_rc` is rate-limited (~61s between live fetches); cache hits are free.
+
+Serenity client: `export STOCK_DATA_API=http://127.0.0.1:8002`
+
+## 5) Validation checklist
 
 Fresh bootstrap:
 1. `docker compose up -d db`
 2. `uv run python main.py start`
-3. Visit `http://127.0.0.1:8000/healthz`
+3. Visit `http://127.0.0.1:${APP_PORT}/healthz`
 
 Persistence check:
 1. Connect to DB and create test row.
 2. `docker compose down` then `docker compose up -d db`
 3. Confirm test row still exists.
 
-## 5) Tailscale peer access
+## 6) Tailscale peer access
 
 By default compose maps `${POSTGRES_PORT}:5432`, which allows remote access on host interfaces.
 To use from another Tailscale node, connect to:
@@ -111,14 +131,14 @@ Recommended security boundaries:
 - Use strong non-default DB credentials.
 - Do not expose this DB port to the public internet.
 
-## 6) Troubleshooting
+## 7) Troubleshooting
 
 - Port conflict (`address already in use`): change `POSTGRES_PORT` in `.env` and restart DB.
 - Permission issue on `.local/postgres-data`: ensure current user can read/write this directory.
 - DB not ready: wait for `docker compose ps` health status `healthy`.
 - Tailscale peer cannot connect: verify ACLs, firewall, and that peer can reach your Tailscale IP.
 
-## 7) Data migration backup/restore
+## 8) Data migration backup/restore
 
 Backup:
 
@@ -132,7 +152,7 @@ Restore:
 cat backup.sql | docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 
-## 8) Production compose (`db + app`)
+## 9) Production compose (`db + app`)
 
 Start production stack:
 

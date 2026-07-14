@@ -41,8 +41,13 @@ main.py  →  app/api/  (FastAPI routes)
 ```
 
 ### API Layer (`app/api/`)
-- Factory `create_app()` builds the FastAPI app, runs migrations on startup, registers `/healthz` (DB ping) and sync routes.
+- Factory `create_app()` builds the FastAPI app, runs migrations on startup, registers `/healthz` (DB ping + cache stats) and sync routes.
 - Sync routes: `POST /sync/trigger` (background job, guarded by `asyncio.Lock`, returns 409 if busy), `GET /sync/status` (running state + progress).
+- On-demand cache routes (`query_router`): `/v1/tushare/{api}`, `/v1/report_rc`, `/v1/fina_mainbz`, `/v1/cache/stats` — disk cache under `data/cache/`, rate-limited (esp. `report_rc` ~1/min).
+
+### Query cache (`app/query/`)
+- `CacheStore`: JSON files keyed by api+params hash.
+- `QueryService`: Tushare call + throttle + retry + cache write.
 
 ### DB Layer (`app/db/`)
 - 6 models: `TradeCalendar`, `StockBasic`, `StockDaily` (wide table, ~30 columns), `StockAdjFactor`, `SyncState`.
