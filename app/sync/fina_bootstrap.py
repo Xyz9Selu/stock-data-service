@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -13,6 +13,22 @@ from app.sync.tushare_client import TushareClient
 logger = logging.getLogger(__name__)
 
 _FINA_REFRESH_DAYS = 7
+
+# Tushare caps each call at ~100 rows. fina_indicator returns about two rows per
+# quarter (original + revised), so a call without a date range silently loses
+# everything older than ~12 years. Fetch in ann_date windows that stay well under it.
+_FETCH_WINDOW_YEARS = 5
+_REFRESH_LOOKBACK_YEARS = 2
+_EARLIEST = date(1990, 1, 1)
+# Statements for periods before listing are announced around the IPO.
+_PRE_LISTING_YEARS = 3
+
+_API_NAMES = {
+    FinaIndicator: "fina_indicator",
+    IncomeStatement: "income",
+    BalanceSheet: "balancesheet",
+    CashFlow: "cashflow",
+}
 
 _FINA_FIELDS = (
     "ts_code,ann_date,end_date,eps,dt_eps,bps,ocfps,cfps,total_revenue_ps,revenue_ps,"
@@ -99,27 +115,64 @@ def _upsert_df(
     return count
 
 
-def _sync_stock(session: Session, client: TushareClient, ts_code: str) -> int:
+_FIELDS = {
+    FinaIndicator: _FINA_FIELDS,
+    IncomeStatement: _INCOME_FIELDS,
+    BalanceSheet: _BALANCE_FIELDS,
+    CashFlow: _CASHFLOW_FIELDS,
+}
+
+
+def _add_years(d: date, years: int) -> date:
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:  # Feb 29 into a non-leap year
+        return d.replace(year=d.year + years, day=28)
+
+
+def _windows(start: date, end: date) -> list[tuple[date, date]]:
+    out: list[tuple[date, date]] = []
+    s = start
+    while s <= end:
+        e = min(end, _add_years(s, _FETCH_WINDOW_YEARS) - timedelta(days=1))
+        out.append((s, e))
+        s = e + timedelta(days=1)
+    return out
+
+
+def _history_start(list_date: date | None) -> date:
+    if list_date is None:
+        return _EARLIEST
+    return max(_EARLIEST, _add_years(list_date, -_PRE_LISTING_YEARS))
+
+
+def _sync_stock(
+    session: Session,
+    client: TushareClient,
+    ts_code: str,
+    start: date,
+    end: date | None = None,
+    models: tuple[type, ...] = tuple(_FIELDS),
+) -> int:
     total = 0
-    for fields, model in [
-        (_FINA_FIELDS, FinaIndicator),
-        (_INCOME_FIELDS, IncomeStatement),
-        (_BALANCE_FIELDS, BalanceSheet),
-        (_CASHFLOW_FIELDS, CashFlow),
-    ]:
-        api_name = {
-            FinaIndicator: "fina_indicator",
-            IncomeStatement: "income",
-            BalanceSheet: "balancesheet",
-            CashFlow: "cashflow",
-        }[model]
-        try:
-            method = getattr(client._api, api_name)
-            df = method(ts_code=ts_code, fields=fields)
-            if df is not None and len(df) > 0:
-                total += _upsert_df(session, model, df)
-        except Exception:
-            logger.debug("Failed to fetch %s for %s", api_name, ts_code)
+    for model in models:
+        api_name = _API_NAMES[model]
+        method = getattr(client._api, api_name)
+        for s, e in _windows(start, end or date.today()):
+            try:
+                client._throttle()
+                df = method(
+                    ts_code=ts_code,
+                    start_date=s.strftime("%Y%m%d"),
+                    end_date=e.strftime("%Y%m%d"),
+                    fields=_FIELDS[model],
+                )
+                if df is not None and len(df) > 0:
+                    if len(df) >= 100:
+                        logger.warning("%s %s %s..%s hit the row cap", api_name, ts_code, s, e)
+                    total += _upsert_df(session, model, df)
+            except Exception:
+                logger.debug("Failed to fetch %s for %s %s..%s", api_name, ts_code, s, e)
     return total
 
 
@@ -128,12 +181,12 @@ def bootstrap_financials(
 ) -> dict[str, int]:
     results: dict[str, int] = {}
     stocks = session.execute(
-        select(StockBasic.ts_code).where(
+        select(StockBasic.ts_code, StockBasic.list_date).where(
             StockBasic.list_status.in_(["L", "D"])
         )
-    ).scalars().all()
+    ).all()
     now = datetime.now(timezone.utc)
-    for idx, ts_code in enumerate(stocks):
+    for idx, (ts_code, list_date) in enumerate(stocks):
         existing = session.execute(
             select(func.count()).select_from(FinaSyncState).where(
                 FinaSyncState.ts_code == ts_code
@@ -141,7 +194,7 @@ def bootstrap_financials(
         ).scalar_one()
         if existing > 0:
             continue
-        count = _sync_stock(session, client, ts_code)
+        count = _sync_stock(session, client, ts_code, _history_start(list_date))
         if count > 0:
             max_end = session.execute(
                 select(func.max(FinaIndicator.end_date)).where(
@@ -175,7 +228,8 @@ def maybe_refresh_financials(
             if delta.days <= _FINA_REFRESH_DAYS:
                 continue
         last_end = state.last_end_date if state else None
-        count = _sync_stock(session, client, ts_code)
+        # Older periods are already stored; recent ones still get restated.
+        count = _sync_stock(session, client, ts_code, _add_years(now.date(), -_REFRESH_LOOKBACK_YEARS))
         if count > 0:
             max_end = session.execute(
                 select(func.max(FinaIndicator.end_date)).where(
@@ -192,4 +246,35 @@ def maybe_refresh_financials(
             )
             session.commit()
         results[ts_code] = count
+    return results
+
+
+def backfill_financials(
+    session: Session, client: TushareClient, shard: int = 0, shards: int = 1
+) -> dict[str, int]:
+    """One-off repair for history lost to the row cap before date windows existed:
+    for each stock and table whose earliest stored period starts more than a year
+    after listing, fetch only the missing span. Upserts make reruns harmless.
+    Tushare latency dominates, so run several shards in parallel processes."""
+    results: dict[str, int] = {}
+    stocks = session.execute(
+        select(StockBasic.ts_code, StockBasic.list_date)
+        .where(StockBasic.list_status.in_(["L", "D"]))
+        .order_by(StockBasic.ts_code)
+    ).all()
+    stocks = stocks[shard::shards]
+    for idx, (ts_code, list_date) in enumerate(stocks):
+        for model in _FIELDS:
+            min_end, min_ann = session.execute(
+                select(func.min(model.end_date), func.min(model.ann_date)).where(model.ts_code == ts_code)
+            ).one()
+            expected = _add_years(list_date or _EARLIEST, 1)
+            if min_end is not None and min_end <= expected:
+                continue
+            count = _sync_stock(
+                session, client, ts_code, _history_start(list_date), min_ann, models=(model,)
+            )
+            results[f"{ts_code}:{_API_NAMES[model]}"] = count
+        if (idx + 1) % 500 == 0:
+            logger.info("Fina backfill progress: %d/%d", idx + 1, len(stocks))
     return results
