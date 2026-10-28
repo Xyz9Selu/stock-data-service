@@ -81,6 +81,29 @@ def bootstrap_stock_basic(session: Session, client: TushareClient) -> None:
     session.commit()
 
 
+def maybe_refresh_trade_calendar(session: Session, client: TushareClient) -> None:
+    max_date = session.execute(select(func.max(TradeCalendar.cal_date))).scalar_one()
+    today = date.today()
+    if max_date is not None and max_date >= today + timedelta(days=7):
+        return
+    start = max_date - timedelta(days=30) if max_date else date(2005, 1, 1)
+    end = today + timedelta(days=30)
+    frame = client.fetch_trade_calendar(start, end)
+    records = [
+        {"cal_date": _parse_date(row.cal_date), "is_open": row.is_open == 1}
+        for row in frame.itertuples(index=False)
+    ]
+    if not records:
+        return
+    stmt = insert(TradeCalendar).values(records)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[TradeCalendar.cal_date],
+        set_={"is_open": stmt.excluded.is_open},
+    )
+    session.execute(stmt)
+    session.commit()
+
+
 def maybe_refresh_stock_basic(session: Session, client: TushareClient) -> None:
     last_update = session.execute(select(func.max(StockBasic.updated_at))).scalar_one()
     if last_update is None:

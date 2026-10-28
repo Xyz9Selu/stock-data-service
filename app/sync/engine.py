@@ -16,6 +16,7 @@ from app.sync.aux_bootstrap import bootstrap_aux, maybe_refresh_aux
 from app.sync.bootstrap import (
     bootstrap_trade_calendar,
     maybe_refresh_stock_basic,
+    maybe_refresh_trade_calendar,
 )
 from app.sync.fina_bootstrap import (
     bootstrap_financials,
@@ -166,6 +167,7 @@ def run_sync() -> None:
     client = TushareClient()
     with session_factory() as session:
         bootstrap_trade_calendar(session, client)
+        maybe_refresh_trade_calendar(session, client)
         maybe_refresh_stock_basic(session, client)
         try:
             bootstrap_index_members(session, client)
@@ -183,7 +185,10 @@ def run_sync() -> None:
         except Exception:
             logger.exception("Aux data sync failed, continuing with daily sync")
         for trade_date in get_missing_dates(session):
-            _sync_date(session, client, trade_date)
+            try:
+                _sync_date(session, client, trade_date)
+            except Exception:
+                logger.exception("Sync failed for date %s", trade_date)
 
 
 @dataclass

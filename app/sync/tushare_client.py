@@ -18,6 +18,9 @@ class TushareClient:
         self._last_call_at = 0.0
 
     def _throttle(self) -> None:
+        elapsed = time.monotonic() - self._last_call_at
+        if elapsed < 0.2:
+            time.sleep(0.2 - elapsed)
         self._last_call_at = time.monotonic()
 
     def _call_with_retry(self, fn_name: str, **kwargs: Any) -> Any:

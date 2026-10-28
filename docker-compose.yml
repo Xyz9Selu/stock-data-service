@@ -28,6 +28,8 @@ services:
       - "${APP_PORT:-8002}:8002"
     volumes:
       - ./data/cache:/data/cache
+    # Bind-mounted cache is host-owned; run as root so writes don't hit EACCES
+    user: "0:0"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8002/healthz"]
       interval: 30s
