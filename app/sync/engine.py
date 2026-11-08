@@ -154,6 +154,77 @@ def sync_adj_factor_for_date(session: Session, client: TushareClient, trade_date
     _upsert_sync_state(session, trade_date, adj_synced=True, completed_at=datetime.now(ZoneInfo("Asia/Shanghai")))
 
 
+# adj_factor is a cumulative back-adjustment factor, but Tushare does rewrite
+# history: on 2026-10-27 it rebased 11 BSE stocks (up to 938x) and on
+# 2026-11-06 rescaled 600610.SH. The per-date sync never revisits old dates,
+# so a rewrite leaves two bases in one series. After each sync we compare one
+# already-stored date against Tushare and re-pull the whole series of every
+# stock that moved. Tushare also trimmed precision to 3 decimals, which moves
+# values by <0.05%, hence the tolerance.
+ADJ_REVISION_TOL = 0.002
+ADJ_HISTORY_START = date(2005, 1, 1)
+
+
+def find_adj_revisions(session: Session, client: TushareClient, check_date: date) -> list[str]:
+    live = {
+        r["ts_code"]: float(r["adj_factor"])
+        for r in client.fetch_adj_factor(check_date).to_dict(orient="records")
+        if r.get("adj_factor")
+    }
+    stored = dict(
+        session.execute(
+            select(StockAdjFactor.ts_code, StockAdjFactor.adj_factor).where(StockAdjFactor.trade_date == check_date)
+        ).all()
+    )
+    return sorted(
+        code
+        for code, value in live.items()
+        if stored.get(code) and abs(float(stored[code]) / value - 1) > ADJ_REVISION_TOL
+    )
+
+
+def resync_adj_history(session: Session, client: TushareClient, ts_code: str) -> int:
+    """Replace one stock's stored series with Tushare's current one."""
+    fetched = client.fetch_adj_factor_history(ts_code, ADJ_HISTORY_START, _cst_today())
+    rows = [
+        {
+            "ts_code": ts_code,
+            "trade_date": datetime.strptime(r["trade_date"], "%Y%m%d").date(),
+            "adj_factor": r["adj_factor"],
+        }
+        for r in fetched
+        if r.get("adj_factor") is not None
+    ]
+    if not rows:
+        logger.warning("adj resync %s: Tushare returned nothing, keeping stored rows", ts_code)
+        return 0
+    session.execute(StockAdjFactor.__table__.delete().where(StockAdjFactor.ts_code == ts_code))
+    for i in range(0, len(rows), 2000):
+        session.execute(insert(StockAdjFactor).values(rows[i : i + 2000]))
+    session.commit()
+    return len(rows)
+
+
+def repair_adj_revisions(session: Session, client: TushareClient, check_dates: list[date]) -> dict[str, int]:
+    codes: set[str] = set()
+    for d in check_dates:
+        found = find_adj_revisions(session, client, d)
+        logger.info("adj audit %s: %d revised", d, len(found))
+        codes.update(found)
+    repaired = {code: resync_adj_history(session, client, code) for code in sorted(codes)}
+    if repaired:
+        logger.warning("adj history re-pulled for %s", repaired)
+    return repaired
+
+
+def _last_synced_date(session: Session) -> date | None:
+    return session.execute(
+        select(func.max(SyncState.trade_date)).where(
+            and_(SyncState.prices_synced.is_(True), SyncState.adj_synced.is_(True))
+        )
+    ).scalar_one()
+
+
 def _sync_date(session: Session, client: TushareClient, trade_date: date) -> None:
     current = session.get(SyncState, trade_date)
     if not current or not current.prices_synced:
@@ -184,11 +255,19 @@ def run_sync() -> None:
             maybe_refresh_aux(session, client)
         except Exception:
             logger.exception("Aux data sync failed, continuing with daily sync")
-        for trade_date in get_missing_dates(session):
+        before = _last_synced_date(session)
+        new_dates = get_missing_dates(session)
+        for trade_date in new_dates:
             try:
                 _sync_date(session, client, trade_date)
             except Exception:
                 logger.exception("Sync failed for date %s", trade_date)
+        if before and new_dates:
+            try:
+                repaired = repair_adj_revisions(session, client, [before])
+                print(f"adj revision check on {before}: re-pulled {repaired or 'none'}")
+            except Exception:
+                logger.exception("adj revision check failed")
 
 
 @dataclass

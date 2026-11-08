@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import tushare as ts
@@ -69,3 +69,18 @@ class TushareClient:
 
     def fetch_adj_factor(self, trade_date: date) -> Any:
         return self._call_with_retry("adj_factor", trade_date=self._fmt_day(trade_date))
+
+    def fetch_adj_factor_history(self, ts_code: str, start: date, end: date, window_days: int = 3000) -> list[dict]:
+        """Full adj_factor series for one stock. A single call caps at 6000 rows,
+        so the range is fetched in windows (3000 calendar days ~ 2000 rows)."""
+        rows: dict[str, dict] = {}
+        s = start
+        while s <= end:
+            e = min(end, s + timedelta(days=window_days))
+            df = self._call_with_retry(
+                "adj_factor", ts_code=ts_code, start_date=self._fmt_day(s), end_date=self._fmt_day(e)
+            )
+            for r in df.to_dict(orient="records"):
+                rows[r["trade_date"]] = r
+            s = e + timedelta(days=1)
+        return [rows[k] for k in sorted(rows)]

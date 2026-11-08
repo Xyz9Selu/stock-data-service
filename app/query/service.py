@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
@@ -9,6 +10,9 @@ import tushare as ts
 
 from app.config import Settings
 from app.query.cache_store import CacheStore
+from app.query.pg_source import PgSource
+
+logger = logging.getLogger(__name__)
 
 API_MIN_INTERVAL: dict[str, float] = {
     "report_rc": 61.0,
@@ -26,6 +30,7 @@ class QueryService:
         ts.set_token(self.settings.tushare_token)
         self._api = ts.pro_api(self.settings.tushare_token)
         self.cache = cache or CacheStore(self.settings)
+        self.pg = PgSource(self.settings)
         self._lock = threading.Lock()
         self._last_call: dict[str, float] = {}
         self._last_any = 0.0
@@ -73,6 +78,13 @@ class QueryService:
     ) -> dict[str, Any]:
         params = {k: v for k, v in (params or {}).items() if v is not None and v != ""}
         if not force_refresh:
+            try:
+                local = self.pg.query(api, params)
+            except Exception:  # DB trouble must not take the endpoint down
+                logger.exception("pg source failed for %s, falling back to Tushare", api)
+                local = None
+            if local is not None:
+                return local
             hit = self.cache.get(api, params, ttl_hours=ttl_hours)
             if hit is not None:
                 return hit
